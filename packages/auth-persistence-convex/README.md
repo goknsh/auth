@@ -1,15 +1,14 @@
 # @yielded/auth-persistence-convex
 
-Convex storage for Yielded Auth's `OAuthServer.Persistence`: consent, authorization
-code redemption, and refresh-token families. Each grant occupies one indexed
-Convex document. Conditional writes and monotonic revocation commit through
-internal mutations called from an action or HTTP action.
+Convex persistence for Yielded Auth passwords, proof challenges, sessions, and
+OAuth authorization-server grants. Auth runs in an action; internal functions
+validate observed records and publish conditional writes atomically. Preparation
+happens before commit, and credentials and hooks are released after acknowledgment.
 
-The application owns its Convex deployment, identity authority, function exports,
-and cleanup schedule. Effect Schema validates persisted and transported records;
-bearer credentials are never stored. Unknown mutation outcomes remain unavailable
-and are never automatically retried by the adapter.
+Applications own subjects, provisioning, factor policy, claims, delivery, and
+retention. Account provisioning and auth records share the adapter's document
+transaction. Effect Schema owns persisted values. Unknown commit outcomes remain
+unavailable without automatic retry.
 
-This initial adapter covers OAuth authorization-server grants. Passwords,
-sign-in proofs, and session persistence are not implemented.
-See the [Convex persistence guide](../../docs/src/content/docs/guide/convex.mdx).
+See the [Convex persistence guide](../../docs/src/content/docs/guide/convex.mdx)
+and [account composition](../../examples/auth/src/convex-account.ts).

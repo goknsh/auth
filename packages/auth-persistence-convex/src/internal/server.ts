@@ -10,8 +10,9 @@ import {
   type SchemaDefinition,
 } from "convex/server";
 import { v } from "convex/values";
-import { DateTime, Effect, Schema } from "effect";
+import { Context, DateTime, Effect, Schema } from "effect";
 
+import { documentTables } from "./document-server";
 import { Cleanup, CompareAndSet, GrantKey, Insert, Payload, StoredGrant } from "./models";
 
 const table = "yieldedAuthOAuthGrants";
@@ -20,6 +21,7 @@ const table = "yieldedAuthOAuthGrants";
  * unique() inside each serializable mutation; it is not itself a unique constraint.
  */
 export const tables = {
+  ...documentTables,
   [table]: defineTable({
     namespace: v.string(),
     grantId: v.string(),
@@ -35,6 +37,10 @@ const query: QueryBuilder<DataModel, "internal"> = internalQueryGeneric;
 const mutation: MutationBuilder<DataModel, "internal"> = internalMutationGeneric;
 const keyArgs = { namespace: v.string(), grantId: v.string() };
 
+class GrantReader extends Context.Service<GrantReader, GenericDatabaseReader<DataModel>>()(
+  "effect-auth/convex/GrantReader",
+) {}
+
 const database = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({ try: run, catch: () => Unavailable.make({}) });
 
@@ -44,10 +50,9 @@ const encodePayload = Schema.encodeEffect(Payload);
 const unavailable = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.mapError(() => Unavailable.make({})));
 
-const find = Effect.fnUntraced(function* (
-  db: GenericDatabaseReader<DataModel>,
-  key: typeof GrantKey.Type,
-) {
+const find = Effect.fnUntraced(function* (key: typeof GrantKey.Type) {
+  const db = yield* GrantReader;
+
   const row = yield* database(() =>
     db
       .query(table)
@@ -76,10 +81,10 @@ export const get = query({
     Effect.runPromise(
       Effect.gen(function* () {
         const key = yield* Schema.decodeUnknownEffect(GrantKey)(args);
-        const row = yield* find(ctx.db, key);
+        const row = yield* find(key);
 
         return row === undefined ? null : yield* encodePayload(row.record);
-      }).pipe(unavailable),
+      }).pipe(Effect.provideService(GrantReader, ctx.db), unavailable),
     ),
 });
 
@@ -91,7 +96,7 @@ export const insert = mutation({
       Effect.gen(function* () {
         const input = yield* Schema.decodeUnknownEffect(Insert)(args);
         const record = yield* decodePayload(input.payload);
-        const existing = yield* find(ctx.db, input);
+        const existing = yield* find(input);
 
         if (existing !== undefined) return false;
         const payload = yield* encodePayload(record);
@@ -106,7 +111,7 @@ export const insert = mutation({
         );
 
         return true;
-      }).pipe(unavailable),
+      }).pipe(Effect.provideService(GrantReader, ctx.db), unavailable),
     ),
 });
 
@@ -120,7 +125,7 @@ export const compareAndSet = mutation({
         const next = yield* decodePayload(input.payload);
 
         if (next.version === input.version) return yield* Unavailable.make({});
-        const current = yield* find(ctx.db, input);
+        const current = yield* find(input);
 
         if (
           current === undefined ||
@@ -138,7 +143,7 @@ export const compareAndSet = mutation({
         );
 
         return true;
-      }).pipe(unavailable),
+      }).pipe(Effect.provideService(GrantReader, ctx.db), unavailable),
     ),
 });
 
@@ -149,7 +154,7 @@ export const revoke = mutation({
     Effect.runPromise(
       Effect.gen(function* () {
         const key = yield* Schema.decodeUnknownEffect(GrantKey)(args);
-        const current = yield* find(ctx.db, key);
+        const current = yield* find(key);
 
         if (current === undefined || current.record.status === "Revoked") return null;
         const payload = yield* encodePayload({ ...current.record, status: "Revoked" });
@@ -157,7 +162,7 @@ export const revoke = mutation({
         yield* database(() => ctx.db.patch(table, current.id, { payload }));
 
         return null;
-      }).pipe(unavailable),
+      }).pipe(Effect.provideService(GrantReader, ctx.db), unavailable),
     ),
 });
 
@@ -189,6 +194,6 @@ export const cleanup = mutation({
         }
 
         return { removed: Math.min(rows.length, limit), hasMore: rows.length > limit };
-      }).pipe(unavailable),
+      }).pipe(Effect.provideService(GrantReader, ctx.db), unavailable),
     ),
 });

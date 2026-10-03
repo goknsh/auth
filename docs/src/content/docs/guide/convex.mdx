@@ -1,24 +1,23 @@
 ---
 title: Convex persistence
-description: Store OAuth authorization-server grants in Convex with atomic mutations.
+description: Store passwords, proof challenges, sessions, and OAuth grants in Convex.
 ---
 
 import { FlowMap } from "@yielded/starlight-theme/components";
 
-`@yielded/auth-persistence-convex` stores [OAuth authorization-server grants](./oauth#authorize-mcp-clients)
-in Convex. One grant owns consent, authorization-code redemption, and its refresh
-family. Internal mutations enforce insert uniqueness, version comparisons, and
-revocation that concurrent refresh cannot undo.
+`@yielded/auth-persistence-convex` stores password credentials, proof challenges,
+and sessions in Convex. Authentication and cryptography run in an action or HTTP
+action. Internal functions own the conditional database commit; credentials and
+lifecycle hooks are released only after that commit is acknowledged.
 
-This initial adapter implements `OAuthServer.Persistence`. It does not yet
-provide password, sign-in proof, or session storage. Your application supplies
-the authorization server's `Identity` service from its authenticated request.
-Confect's `Auth.getUserIdentity` can be part of that identity lookup; this adapter
-does not replace Confect's identity service or configure a Convex JWT provider.
+Your application owns subjects, account provisioning, claims, factor policy, and
+private delivery. Auth records and application provisioning use the same
+`Transaction` service. This adapter does not replace Confect's identity service
+or configure a Convex JWT provider.
 
 <FlowMap
-  title="Convex owns each grant commit"
-  description="OAuth work runs in an action. The persistence Layer calls internal queries and mutations, waits for each mutation to commit, then returns its result."
+  title="Convex owns each auth commit"
+  description="The action prepares results and hooks, then an internal mutation validates observed records and time bounds before publishing every write atomically."
   columns={3}
   nodes={[
     {
@@ -26,28 +25,28 @@ does not replace Confect's identity service or configure a Convex JWT provider.
       at: [1, 1],
       owner: "app",
       title: "Action / HTTP action",
-      note: "OAuthServer and application identity",
+      note: "Password, proof, and session workflows",
     },
     {
       id: "layer",
       at: [1, 2],
       owner: "library",
       title: "Persistence Layer",
-      code: "OAuthServerPersistence.layer",
+      code: "DocumentStore.layer",
     },
     {
       id: "functions",
       at: [2, 2],
       owner: "library",
       title: "Internal functions",
-      note: "Schema validation and conditional writes",
+      note: "Read validation and conditional writes",
     },
     {
       id: "database",
       at: [2, 3],
       owner: "app",
       title: "Convex database",
-      note: "One indexed document per grant",
+      note: "Indexed auth and account records",
     },
   ]}
   edges={[
@@ -72,11 +71,13 @@ import { defineSchema } from "convex/server";
 export default defineSchema({ ...tables });
 ```
 
-Register the supplied internal functions. Keep them internal; they are storage
-authority, not client-accessible auth endpoints.
+Register the supplied internal functions. They are storage authority, not
+client-accessible auth endpoints:
 
-```ts title="convex/authGrants.ts"
+```ts title="convex/authStorage.ts"
 export {
+  readDocuments,
+  commitDocuments,
   get,
   insert,
   compareAndSet,
@@ -85,54 +86,113 @@ export {
 } from "@yielded/auth-persistence-convex/Server";
 ```
 
-Convex generates the function references when you deploy the schema and functions.
-The table is `yieldedAuthOAuthGrants`, indexed by `(namespace, grantId)` and
-`expiresAtMillis`. Effect Schema validates each grant's JSON payload on reads and
-writes. It contains authorization metadata and version markers, never bearer
-tokens or provider credentials.
+## Supply storage inside an action
 
-## Supply the Layer inside an action
-
-Build the persistence Layer with the current action context and generated
-internal references:
+Construct one `DocumentStore` Layer for the current action and auth namespace:
 
 ```ts
-import { ActionContext, Functions, OAuthServerPersistence } from "@yielded/auth-persistence-convex";
+import {
+  ActionContext,
+  DocumentFunctions,
+  DocumentStore,
+  PasswordPersistence,
+  ProofPersistence,
+  makeSessions,
+} from "@yielded/auth-persistence-convex";
 import { Layer } from "effect";
 
 import { internal } from "./_generated/api";
 
-// Inside an action or HTTP action handler, where ctx is its current context:
-const persistence = OAuthServerPersistence.layer.pipe(
-  Layer.provide([Layer.succeed(ActionContext, ctx), Layer.succeed(Functions, internal.authGrants)]),
+const documents = DocumentStore.layer(AppAuth.namespace).pipe(
+  Layer.provide([
+    Layer.succeed(ActionContext, ctx),
+    Layer.succeed(DocumentFunctions, internal.authStorage),
+  ]),
 );
+
+const persistence = Layer.mergeAll(
+  PasswordPersistence.layer,
+  ProofPersistence.layer,
+  makeSessions(Claims, AppAuth.sessions),
+).pipe(Layer.provideMerge(documents));
 ```
 
-Provide `persistence` to your `OAuthServer` Layer. The
-[composition example](https://github.com/yielded-dev/auth/blob/main/examples/auth/src/convex-persistence.ts)
-keeps the application's identity service required; the
-[OAuth guide](./oauth#authorize-mcp-clients) covers signing keys, client
-registration, consent, and protected resources.
+Supply `persistence` to the corresponding auth Layers alongside cryptography,
+lifecycle hooks, delivery, and application policy. `makeSessions` supplies the
+authentication authority, stateful storage, session listing, pending authentication,
+and signed-session validity. The [account composition example](https://github.com/yielded-dev/auth/blob/main/examples/auth/src/convex-account.ts)
+shows password registration, provisioning, and claims.
 
-Create the Layer separately for every action invocation. Do not capture `ctx` in
-a global runtime or use this Layer inside a Convex query or mutation. A nested
-mutation there belongs to the outer transaction and cannot provide the standalone
-commit acknowledgment this service requires. An ambient Yielded commit scope is
-also rejected before storage calls.
+Create these Layers per invocation. Query and mutation contexts are rejected:
+their nested writes cannot acknowledge an independent root commit. An ambient
+Yielded commit scope is also rejected before storage work.
 
-## Retention and failures
+## Own accounts and provisioning
 
-Schedule `internal.authGrants.cleanup` through your application, with
-`{ limit: 100 }`. Limits range from 1 to 1000; the result contains `removed` and
-`hasMore`. It removes only grants whose retention deadline has passed according
-to Convex's transaction clock. Do not shorten that deadline or reuse grant IDs.
+`makePasswordRegistration` binds the password module's `RegistrationAuthority`
+and exposes a `Provisioning` service. Its `create` Effect stages the application's
+account and `Subject` through `Transaction`, then returns the application's
+subject ID. Registration inserts the unique unverified identifier and password
+in the same commit. Reusing a request ID never adopts an earlier subject or
+replaces its password.
 
-Duplicate inserts and lost version comparisons return `false`. Malformed data
-and failed or uncertain storage calls return `OAuthServerUnavailable`. The
-adapter never retries an uncertain insert or replacement. Convex may retry a
-conflicted mutation internally; that mutation contains only deterministic storage
-work, not token issuance, provider exchanges, or lifecycle callbacks.
+The `Subject`, `Identifier`, and `AuthorityCredential` schemas describe the
+authoritative identity metadata. Store application profiles separately with an
+application Schema. Use `bindIdentifier` to maintain unique ownership and the
+subject's identifier index together. Bump the subject's security revision with
+`invalidateSubject` whenever status, factor policy, or identifier semantics
+change. Those writes must share the transaction; an independently updated
+Convex table cannot supply this adapter's authentication authority.
 
-Grant writes cannot join application writes in another mutation. Password and
-session storage have additional preparation and commit contracts; this grant
-adapter does not claim to satisfy those boundaries.
+Inside provisioning or a composed application operation, yield `Transaction`
+and use its schema-based `get`, `put`, `remove`, and bounded `scan` operations.
+They join the existing commit. Do not start another `DocumentStore.transaction`
+or call unrelated Convex mutations from that body. External delivery and other
+side effects belong after commit. Subject identifiers and claims remain yours;
+the adapter creates no application account policy.
+
+## Transactions and failures
+
+The action reads bounded indexed records, prepares its immutable result and
+hook journal, then submits one conditional mutation. Convex validates each read,
+including empty reads and range membership, checks fresh time bounds, and applies
+the writes atomically. Preparation failure publishes nothing. A lost comparison
+discards the prepared result and hooks. An uncertain outcome remains unavailable;
+the adapter never repeats credential issuance or automatically retries the command.
+
+Session issuance timestamps use Convex authority time sampled during preparation.
+The final mutation rechecks expiry and proof-freshness bounds, so delayed work
+cannot publish expired authentication. The planning horizon is 30 seconds.
+Transactions support at most 128 observations and 128 writes; scans read at most
+500 records per page. A scan without explicit pagination requires fewer than
+500 results. Use explicit pages for larger collections. Capacity failures fail closed.
+
+Password changes and recovery consume their authority decisions and bump security
+revision in the same commit. Old sessions and pending authentication then fail
+verification. Proof requests, consumption, rolling budgets, and delivery claims
+retain their own replay and retention rules. Application delivery services still
+own provider idempotency and ambiguity handling.
+
+Schedule cleanup through the password and proof services. Each invocation is
+bounded: password cleanup accepts up to 50 attempts, while proof cleanup processes
+up to 20 retention entries and reports `hasMore`. Keep command and identity records
+until application policy can safely retire their durable identifiers; never reuse
+flow or command IDs.
+
+Session and pending-authentication cleanup remains application-owned. Preserve
+session flow records through their deduplication horizon and signed-session
+revocations through absolute expiry. Separate adapters are still required for
+optional TOTP, passkey, and step-up persistence.
+
+## OAuth authorization-server grants
+
+The independent `OAuthServerPersistence.layer` still implements
+[OAuth authorization-server grants](./oauth#authorize-mcp-clients). Provide
+`ActionContext` and `Functions` using the same internal function module. It stores
+one grant document with atomic insert, version comparison, and monotonic
+revocation. The [OAuth composition example](https://github.com/yielded-dev/auth/blob/main/examples/auth/src/convex-persistence.ts)
+keeps the authorization server's application `Identity` service required.
+
+Schedule `internal.authStorage.cleanup` with `{ limit: 100 }` to remove expired
+grants. Limits range from 1 to 1000; the result contains `removed` and `hasMore`.
+Grant writes commit independently of document transactions.
