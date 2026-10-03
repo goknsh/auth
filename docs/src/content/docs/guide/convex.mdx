@@ -86,70 +86,104 @@ export {
 } from "@yielded/auth-persistence-convex/Server";
 ```
 
-## Supply storage inside an action
+## Managed password accounts
 
-Construct one `DocumentStore` Layer for the current action and auth namespace:
+Let the provider assemble password, proof, and session storage, account
+provisioning, and claims resolution from your Auth definition:
 
 ```ts
-import {
-  ActionContext,
-  DocumentFunctions,
-  DocumentStore,
-  PasswordPersistence,
-  ProofPersistence,
-  makeSessions,
-} from "@yielded/auth-persistence-convex";
-import { Layer } from "effect";
+import * as Convex from "@yielded/auth-persistence-convex";
 
-import { internal } from "./_generated/api";
+import { AppAuth, signInRequirement, actionRequirement } from "./auth";
 
-const documents = DocumentStore.layer(AppAuth.namespace).pipe(
-  Layer.provide([
-    Layer.succeed(ActionContext, ctx),
-    Layer.succeed(DocumentFunctions, internal.authStorage),
-  ]),
-);
-
-const persistence = Layer.mergeAll(
-  PasswordPersistence.layer,
-  ProofPersistence.layer,
-  makeSessions(Claims, AppAuth.sessions),
-).pipe(Layer.provideMerge(documents));
+export const persistence = Convex.managed(AppAuth, {
+  requirements: {
+    signIn: signInRequirement,
+    actions: actionRequirement,
+  },
+});
 ```
 
-Supply `persistence` to the corresponding auth Layers alongside cryptography,
-lifecycle hooks, delivery, and application policy. `makeSessions` supplies the
-authentication authority, stateful storage, session listing, pending authentication,
-and signed-session validity. The [account composition example](https://github.com/yielded-dev/auth/blob/main/examples/auth/src/convex-account.ts)
-shows password registration, provisioning, and claims.
+The provider derives namespaces, module IDs, and claims from `AppAuth`. Its
+managed profile validates the decoded registration value against the claims
+Schema and stores it alongside the subject, identifier, and password in one
+commit. Registration data must satisfy that Schema; otherwise supply custom
+provisioning and claims services. Policy remains application-owned: `actions`
+defaults to `signIn`, and your password-action evidence verifier is still required.
 
-Create these Layers per invocation. Query and mutation contexts are rejected:
-their nested writes cannot acknowledge an independent root commit. An ambient
-Yielded commit scope is also rejected before storage work.
+Inside each action, connect the provider to the generated internal functions:
 
-## Own accounts and provisioning
+```ts
+const PersistenceLive = persistence.layer(ctx, internal.authStorage);
+```
 
-`makePasswordRegistration` binds the password module's `RegistrationAuthority`
-and exposes a `Provisioning` service. Its `create` Effect stages the application's
-account and `Subject` through `Transaction`, then returns the application's
-subject ID. Registration inserts the unique unverified identifier and password
-in the same commit. Reusing a request ID never adopts an earlier subject or
-replaces its password.
+Supply `PersistenceLive` to auth with ordinary `Effect.provide` or
+`Layer.provide`. Cryptography, lifecycle hooks, password hashing, delivery, and
+action policy remain explicit service dependencies. The
+[account example](https://github.com/yielded-dev/auth/blob/main/examples/auth/src/convex-account.ts)
+contains the complete persistence configuration.
 
-The `Subject`, `Identifier`, and `AuthorityCredential` schemas describe the
-authoritative identity metadata. Store application profiles separately with an
-application Schema. Use `bindIdentifier` to maintain unique ownership and the
-subject's identifier index together. Bump the subject's security revision with
-`invalidateSubject` whenever status, factor policy, or identifier semantics
-change. Those writes must share the transaction; an independently updated
-Convex table cannot supply this adapter's authentication authority.
+Managed composition currently accepts password strategies with registration.
+It also supplies authentication authority, stateful session storage, listing,
+pending authentication, and signed-session validity. The individual persistence
+Layers remain available for other compositions.
 
-Inside provisioning or a composed application operation, yield `Transaction`
-and use its schema-based `get`, `put`, `remove`, and bounded `scan` operations.
-They join the existing commit. Do not start another `DocumentStore.transaction`
-or call unrelated Convex mutations from that body. External delivery and other
-side effects belong after commit. Subject identifiers and claims remain yours;
-the adapter creates no application account policy.
+## Override services with Effect
+
+Explicitly provided services take precedence over managed defaults. Use the
+existing auth service keys to replace claims or persistence, without changing
+the provider's constructor:
+
+```ts
+import { Layer } from "effect";
+
+const CustomClaims = Layer.succeed(AppAuth.strategies.password.SessionClaims, {
+  resolve: ({ subjectId }) => customerClaims(subjectId),
+});
+
+const PersistenceLive = persistence
+  .layer(ctx, internal.authStorage)
+  .pipe(Layer.provide(CustomClaims));
+```
+
+Here `customerClaims` is your application's Effect returning the configured
+claims or `PasswordUnavailable`. Its dependencies belong in `CustomClaims`.
+The same approach applies to password/proof storage and the session services.
+
+For custom account creation, provide
+`persistence.provisioning.password` (use your strategy's actual name). Its `create`
+Effect receives typed registration data and an identifier, joins the current
+`Transaction`, and returns the application's subject ID. Stage a `Subject` with
+its policy and security revision, plus any application profile data that must
+commit atomically. The registration adapter adds the identifier and password.
+If the profile layout changes, replace `SessionClaims` as well.
+
+## Own account data and transactions
+
+`Subject`, `Identifier`, and `AuthorityCredential` describe authoritative identity
+metadata. Managed profiles use the Auth definition's claims Schema. Custom data
+uses your own Effect Schema through `Transaction.get`, `put`, `remove`, and
+bounded `scan`. The underlying records live in the adapter's indexed document
+table with Schema-encoded payloads; managed composition does not map arbitrary
+native Convex tables.
+
+Use `bindIdentifier` to maintain unique ownership and the subject's identifier
+index together. Bump the subject's security revision with `invalidateSubject`
+whenever status, factor policy, or identifier semantics change. Those writes
+must share the transaction; an independently updated Convex table cannot supply
+this adapter's authentication authority.
+
+Inside provisioning, yield `Transaction` to join the current commit. Do not start
+another `DocumentStore.transaction` or call unrelated Convex mutations from that
+body. External delivery and other side effects belong after commit. For a
+standalone application operation, use `DocumentStore.transaction` to acquire a
+new transaction. The provider exposes `DocumentStore` for this purpose.
+
+For lower-level composition, use `DocumentStore.layer(namespace)`,
+`PasswordPersistence.layer`, `ProofPersistence.layer`, `makeSessions`, and
+`makePasswordRegistration`. Supply `ActionContext` and `DocumentFunctions` per
+invocation. Query and mutation contexts cannot acknowledge an independent root
+commit, and ambient Yielded commit scopes are rejected before storage work.
 
 ## Transactions and failures
 

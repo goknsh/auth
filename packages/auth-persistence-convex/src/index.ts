@@ -26,3 +26,4 @@ export {
 export { PasswordPersistence, makePasswordRegistration } from "./internal/passwords";
 export { makeSessions } from "./internal/sessions";
 export { ProofPersistence } from "./internal/proofs";
+export { managed, type ManagedOptions } from "./internal/managed";
