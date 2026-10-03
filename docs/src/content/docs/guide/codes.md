@@ -146,7 +146,7 @@ flow IDs must not reset account-level attempt budgets.
 ## Supply the services
 
 Lookup, claims, storage, and delivery are application-supplied. The library provides
-an exact-route allowlist helper, Web Crypto, and empty lifecycle hooks:
+a delivery worker, an exact-route allowlist helper, Web Crypto, and empty lifecycle hooks:
 
 ```ts title="apps/server/email-live.ts"
 import { Layer } from "effect";
@@ -158,7 +158,7 @@ import { lookupEmail, resolveEmailClaims } from "./auth-accounts";
 import { ProofPersistenceLive } from "./auth-persistence";
 import { EmailLive } from "./email";
 
-export const EmailLive = Layer.mergeAll(
+export const EmailServicesLive = Layer.mergeAll(
   ProofPersistenceLive,
   Layer.succeed(Email.EmailSignInTargets, { lookup: lookupEmail }),
   Layer.succeed(AppAuth.strategies.email.SessionClaims, { resolve: resolveEmailClaims }),
@@ -167,13 +167,16 @@ export const EmailLive = Layer.mergeAll(
 );
 
 export const AuthLive = AppAuth.layer.pipe(
-  Layer.provide(EmailLive),
+  Layer.provide(EmailServicesLive),
   Layer.provide(AuthDependencies),
 );
 ```
 
 The relative imports are your application modules. `EmailLive` implements the
-email service: see [email delivery](./email-delivery) for REST API and Alchemy examples. `AuthDependencies` supplies the shared
+email service. Auth's built-in worker keeps provider acceptance outside the request's
+wait for a response; build Auth in an application scope that outlives requests.
+See [email delivery](./email-delivery#compose-auth) for runtime ownership and overrides.
+`AuthDependencies` supplies the shared
 [session, account, and key configuration](../reference/adapters#compose-the-application-layer).
 For database-backed lookup, use [the email adapter](../reference/adapters#email).
 

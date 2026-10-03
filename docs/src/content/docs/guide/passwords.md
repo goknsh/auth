@@ -202,13 +202,19 @@ completion submission. Completion changes the password; sign in separately for a
 
 ### Delivery and retry boundaries
 
-Email delivery awaits provider acceptance, which does not prove inbox delivery.
+Auth's built-in worker admits delivery after the proof commits, so public requests
+do not wait for provider acceptance. No scheduler setup is needed; build Auth in an
+application scope that outlives requests, as shown in [email delivery](./email-delivery#compose-auth).
+Work may start before the response is sent. Application hooks and persistence can
+still vary in latency.
+
+Provider acceptance does not prove inbox delivery.
 The transport distinguishes definite rejection from uncertain acceptance. Neither
 Auth nor the transport should automatically resend an uncertain message; this email
 service makes no deduplication promise and requires `maximumDeliveryAttempts: 1`.
 
 An exact `requestReset` retry can recover a generic receipt, not guarantee another
-send. Dispatch is a process-local continuation after persistence commits, not a
+send. Scheduled dispatch is a process-local continuation after persistence commits, not a
 durable outbox. A crash can leave an unsent proof. Let the user check their inbox
 and, if needed, explicitly start a new flow under the configured cooldown and attempt
 limits. A consumed proof or an unknown commit outcome does not authorize repeating
