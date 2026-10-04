@@ -93,7 +93,7 @@ const issue = Effect.fnUntraced(function* (
   };
 
   const prepared = yield* (yield* Proofs.ProofPersistence).issue(
-    { record, policy, eligible: options.eligible ?? true, supersedes: options.supersedes },
+    { ...options, record, policy, eligible: options.eligible ?? true },
     (decision, journal) => journal.prepare(decision),
   );
 
