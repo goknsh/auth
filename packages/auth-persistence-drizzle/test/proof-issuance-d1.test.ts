@@ -45,7 +45,12 @@ const issue = Effect.fnUntraced(function* (
   const { proofPersistence } = yield* makeD1ProofPersistenceServices(d1Mapping);
 
   const prepared = yield* proofPersistence.issue(
-    { ...options, record: value, policy, eligible: options.eligible ?? true },
+    {
+      record: value,
+      policy,
+      eligible: options.eligible ?? true,
+      ...(options.supersedes === undefined ? {} : { supersedes: options.supersedes }),
+    },
     (decision, journal) => journal.prepare(decision),
   );
 
