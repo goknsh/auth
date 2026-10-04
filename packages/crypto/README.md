@@ -14,7 +14,8 @@ an implementation through a direct backend import:
 
 - `/WebCrypto`: native operations from an explicitly supplied `SubtleCrypto`.
 - `/Portable`: WebCrypto plus Noble Argon2id and XChaCha20-Poly1305.
-- `/NodeCrypto`: Node WebCrypto and native Argon2id, plus Noble XChaCha20-Poly1305.
+- `/platform-node`, `/platform-bun`: shared Node-compatible WebCrypto and native
+  Argon2id, plus Noble XChaCha20-Poly1305.
 
 All backend Layers require one shared `KdfAdmission` Layer. Waiting is bounded;
 once admitted, derivation retains its permit until actual work and cleanup finish,
@@ -24,7 +25,8 @@ thread. JavaScript cannot guarantee zeroization or constant-time execution.
 Secret inputs, derived bytes and decrypted plaintext use `Redacted`. Backend
 errors contain classifications without native causes or secret payloads. Keep
 each AEAD nonce unique for its key. Signature operations use PKCS8/SPKI DER keys;
-JOSE and password-hash serialization belong to other layers.
+raw key components can be encoded through the native key parser.
+[JOSE](../jose/README.md) and password-hash serialization belong to other layers.
 
 See the [usage and supported profiles](../../docs/src/content/docs/reference/crypto.md)
 and [third-party notices](THIRD_PARTY_NOTICES.md). The notices ship in this package.

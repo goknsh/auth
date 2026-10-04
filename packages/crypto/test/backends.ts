@@ -1,5 +1,5 @@
 import * as KdfAdmission from "@yielded/crypto/KdfAdmission";
-import * as NodeCrypto from "@yielded/crypto/NodeCrypto";
+import * as NodeCrypto from "@yielded/crypto/platform-node";
 import * as Portable from "@yielded/crypto/Portable";
 import * as WebCrypto from "@yielded/crypto/WebCrypto";
 import { Layer } from "effect";

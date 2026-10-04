@@ -22,7 +22,7 @@ admission Layer across backend instances so they share the same resource budget.
 ```ts
 import { NodeCrypto as PlatformCrypto } from "@effect/platform-node";
 import { Aead, KdfAdmission } from "@yielded/crypto";
-import * as NodeCrypto from "@yielded/crypto/NodeCrypto";
+import * as NodeCrypto from "@yielded/crypto/platform-node";
 import { Crypto, Effect, Layer, Redacted } from "effect";
 
 const Admission = KdfAdmission.layer({ concurrency: 1, maxQueued: 16 });
@@ -55,7 +55,8 @@ For a supplied WebCrypto capability, use
 Choose `Portable.layer(globalThis.crypto.subtle)` from `@yielded/crypto/Portable`
 when you also need portable Argon2id and XChaCha20-Poly1305. Each accepts an optional
 second argument containing KDF limit overrides; `NodeCrypto.layer(limits?)`
-takes those overrides as its first argument.
+takes those overrides as its first argument. Bun uses the same implementation
+through `@yielded/crypto/platform-bun`.
 
 ## Supported profiles
 
@@ -71,17 +72,20 @@ takes those overrides as its first argument.
 | `Signature.Signature` | `Ed25519`                                    | Pure Ed25519, 64-byte signature                                                   |
 
 Signature signing takes a `Redacted` PKCS8 DER private key; verification takes an
-SPKI DER public key. Keys are limited to 16 KiB of DER. This package does not parse
-JWK, JWT, PHC password hashes, PEM text or Auth envelopes. SHA-1 HMAC is available
+SPKI DER public key. `encodePublicKey` and `encodePrivateKey` convert raw
+unsigned key components through the platform’s key parser; private components
+and the resulting PKCS8 use `Redacted`. Keys are limited to 16 KiB of DER.
+[JOSE](./jose.mdx) owns JWK metadata and JWTs. PHC password hashes, PEM text and
+Auth envelopes are outside this package. SHA-1 HMAC is available
 for existing protocols such as TOTP.
 
 ## Backends and resource limits
 
-| Backend      | Native operations                             | Portable operations        | Unsupported operations                              |
-| ------------ | --------------------------------------------- | -------------------------- | --------------------------------------------------- |
-| `WebCrypto`  | AES-GCM, HMAC, PBKDF2, HKDF, signatures       | None                       | Argon2id, XChaCha                                   |
-| `Portable`   | AES-GCM, HMAC, PBKDF2, HKDF, signatures       | Noble Argon2id and XChaCha | Host-specific native capability gaps                |
-| `NodeCrypto` | Node WebCrypto operations and native Argon2id | Noble XChaCha              | Native Argon2id when the host lacks `crypto.argon2` |
+| Backend                         | Native operations                                        | Portable operations        | Unsupported operations                              |
+| ------------------------------- | -------------------------------------------------------- | -------------------------- | --------------------------------------------------- |
+| `WebCrypto`                     | AES-GCM, HMAC, PBKDF2, HKDF, signatures                  | None                       | Argon2id, XChaCha                                   |
+| `Portable`                      | AES-GCM, HMAC, PBKDF2, HKDF, signatures                  | Noble Argon2id and XChaCha | Host-specific native capability gaps                |
+| `platform-node`, `platform-bun` | Node-compatible WebCrypto operations and native Argon2id | Noble XChaCha              | Native Argon2id when the host lacks `crypto.argon2` |
 
 Backend selection is explicit. An unavailable native algorithm fails with
 `CryptoUnsupportedAlgorithm`; it does not silently select a different algorithm

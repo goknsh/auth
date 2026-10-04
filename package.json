@@ -112,7 +112,8 @@
     "expo": "54.0.37",
     "expo-secure-store": "15.0.8",
     "electron": "44.5.1",
-    "@electron/packager": "20.3.0"
+    "@electron/packager": "20.3.0",
+    "jose": "6.2.12"
   },
   "patchedDependencies": {
     "drizzle-orm@1.0.0-rc.4": "packages/drizzle-effect-v4-patch/patches/drizzle-orm@1.0.0-rc.4.patch"

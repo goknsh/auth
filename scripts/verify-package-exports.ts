@@ -102,7 +102,7 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
     );
 
     for (const pkg of packages) {
-      if (pkg.manifest.name === "@yielded/crypto") {
+      if (["@yielded/crypto", "@yielded/jose"].includes(pkg.manifest.name)) {
         for (const dependency of Object.keys({
           ...pkg.manifest.dependencies,
           ...pkg.manifest.optionalDependencies,
@@ -110,7 +110,7 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
           ...pkg.manifest.devDependencies,
         })) {
           if (authPackage.test(dependency))
-            report(pkg.file, `Reusable crypto must not depend on Auth package ${dependency}`);
+            report(pkg.file, `${pkg.manifest.name} must not depend on Auth package ${dependency}`);
         }
       }
       if (pkg.manifest.name === "@yielded/auth-persistence") {
@@ -369,8 +369,11 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
               imports.push({ specifier: node.arguments[0].text, typeOnly: false });
           });
           for (const { specifier, typeOnly } of imports) {
-            if (manifest.name === "@yielded/crypto" && authPackage.test(specifier))
-              report(file, `Reusable crypto must not import Auth module ${specifier}`);
+            if (
+              ["@yielded/crypto", "@yielded/jose"].includes(manifest.name) &&
+              authPackage.test(specifier)
+            )
+              report(file, `${manifest.name} must not import Auth module ${specifier}`);
             if (manifest.name === "@yielded/auth-persistence" && /drizzle/i.test(specifier))
               report(
                 file,

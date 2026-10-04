@@ -2,11 +2,11 @@ import * as crypto from "node:crypto";
 
 import { Effect } from "effect";
 
-import { CryptoUnavailable, UnsupportedAlgorithm } from "./Errors";
-import type { Argon2, Argon2Parameters } from "./internal/kdf";
-import { makeLayer } from "./internal/layer";
-import { xchacha } from "./internal/xchacha";
-import type { Limits } from "./Kdf";
+import { CryptoUnavailable, UnsupportedAlgorithm } from "../Errors";
+import type { Limits } from "../Kdf";
+import type { Argon2, Argon2Parameters } from "./kdf";
+import { makeLayer } from "./layer";
+import { xchacha } from "./xchacha";
 
 const argon2: Argon2 = Effect.fnUntraced(function* (input: Argon2Parameters) {
   // Namespace import keeps this module loadable on Node versions without Argon2.
@@ -34,7 +34,7 @@ const argon2: Argon2 = Effect.fnUntraced(function* (input: Argon2Parameters) {
   });
 });
 
-/** Node native WebCrypto/Argon2id with the portable XChaCha20-Poly1305 extension. */
+/** Node-compatible WebCrypto/Argon2id with the portable XChaCha20-Poly1305 extension. */
 export const layer = (limits: Partial<Limits> = {}) =>
   // Node's declarations include additional key usages absent from lib.dom. The
   // standard operations used here share the WebCrypto ABI; no payload is cast.

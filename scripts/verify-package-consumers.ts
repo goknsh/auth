@@ -270,7 +270,7 @@ const bundleConsumer = Effect.fn("packageConsumers.bundle")(function* (
   };
 });
 
-const checkCryptoConsumers = Effect.fn("packageConsumers.crypto")(function* (
+const checkReusableConsumers = Effect.fn("packageConsumers.reusable")(function* (
   repositoryRoot: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -306,16 +306,37 @@ const checkCryptoConsumers = Effect.fn("packageConsumers.crypto")(function* (
     yield* fs.symlink(target, link);
   }
 
+  const joseSource = path.join(repositoryRoot, "packages/jose");
+  const joseDestination = path.join(stage, "packages/jose");
+
+  const joseManifest = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(PublishManifest))(
+    yield* fs.readFileString(path.join(joseSource, "package.json")),
+  );
+
+  if (joseManifest.exports === undefined)
+    return yield* new PackageConsumerError({ message: "JOSE exports are missing" });
+  const joseEntries = Object.keys(joseManifest.exports);
+
+  yield* fs.makeDirectory(joseDestination, { recursive: true });
+  yield* fs.copyFile(
+    path.join(joseSource, "package.json"),
+    path.join(joseDestination, "package.json"),
+  );
+  yield* fs.copy(path.join(joseSource, "dist"), path.join(joseDestination, "dist"));
+  yield* fs.symlink(joseDestination, path.join(stage, "node_modules/@yielded/jose"));
+
   const namespaces = ["Aead", "Errors", "Hmac", "Kdf", "KdfAdmission", "Signature"];
+  const joseNamespaces = ["Errors", "Jwe", "Jwk", "Jwks", "Jws", "Jwt"];
   const contracts = [".", ...namespaces.map((name) => `./${name}`)];
   const backends = Object.keys(manifest.exports).filter((key) => !contracts.includes(key));
 
   // This stage never installs Auth. Contracts must also load before backend dependencies exist.
   yield* withPublishManifests(stage, () =>
     Effect.gen(function* () {
-      for (const [probe, entries] of [
-        ["crypto-contracts", contracts],
-        ["crypto-backends", backends],
+      for (const [probe, entries, packageName, rootNamespaces] of [
+        ["crypto-contracts", contracts, "@yielded/crypto", namespaces],
+        ["jose", joseEntries, "@yielded/jose", joseNamespaces],
+        ["crypto-backends", backends, "@yielded/crypto", namespaces],
       ] as const) {
         if (probe === "crypto-backends") {
           for (const name of Object.keys(manifest.dependencies ?? {})) {
@@ -332,7 +353,7 @@ const checkCryptoConsumers = Effect.fn("packageConsumers.crypto")(function* (
         }
 
         const names = entries.map((key) =>
-          key === "." ? "@yielded/crypto" : `@yielded/crypto${key.slice(1)}`,
+          key === "." ? packageName : `${packageName}${key.slice(1)}`,
         );
 
         const declarations = path.join(stage, "fixtures", `${probe}.ts`);
@@ -343,11 +364,11 @@ const checkCryptoConsumers = Effect.fn("packageConsumers.crypto")(function* (
         );
         yield* checkDeclarations(stage, [declarations]);
 
-        // Only the direct NodeCrypto entry may pull native imports into a consumer.
+        // Only the direct runtime entries may pull native imports into a consumer.
         yield* fs.writeFileString(
           path.join(stage, "fixtures", `${probe}-browser.ts`),
           names
-            .filter((name) => name !== "@yielded/crypto/NodeCrypto")
+            .filter((name) => !name.startsWith("@yielded/crypto/platform-"))
             .map((name, index) => `export * as Crypto${index} from "${name}";`)
             .join("\n"),
         );
@@ -359,10 +380,10 @@ const checkCryptoConsumers = Effect.fn("packageConsumers.crypto")(function* (
             "--input-type=module",
             "--eval",
             `import assert from "node:assert/strict";
-const root = await import("@yielded/crypto");
-assert.deepEqual(Object.keys(root).sort(), ${JSON.stringify(namespaces)});
-for (const name of ${JSON.stringify(namespaces)}) {
-  assert.equal(root[name], await import("@yielded/crypto/" + name));
+const root = await import(${JSON.stringify(packageName)});
+assert.deepEqual(Object.keys(root).sort(), ${JSON.stringify(rootNamespaces)});
+for (const name of ${JSON.stringify(rootNamespaces)}) {
+  assert.equal(root[name], await import(${JSON.stringify(packageName + "/")} + name));
 }
 for (const name of ${JSON.stringify(names)}) await import(name);`,
           ],
@@ -383,7 +404,7 @@ for (const name of ${JSON.stringify(names)}) await import(name);`,
             message: `${probe} consumer exited ${code}: ${stdout}${stderr}`,
           });
         yield* Console.log(
-          `${probe}: ${names.length} published exports load and type-check without Auth; browser imports exclude NodeCrypto.`,
+          `${probe}: ${names.length} published exports load and type-check without Auth; browser imports exclude Node/Bun runtime entries.`,
         );
       }
     }),
@@ -397,7 +418,7 @@ export const verifyPackageConsumers = Effect.fn("verifyPackageConsumers")(functi
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  yield* checkCryptoConsumers(repositoryRoot);
+  yield* checkReusableConsumers(repositoryRoot);
 
   // TypeScript resolves package symlinks to real paths, including macOS /var aliases.
   const stage = yield* fs

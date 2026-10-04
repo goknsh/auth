@@ -65,8 +65,13 @@ SDK adapters live in companion packages, and `sideEffects: []` requires import-t
 `@yielded/crypto` owns reusable cryptography services and explicit runtime Layers;
 it must not depend on or import Auth packages. Its root exposes `Aead`, `Errors`,
 `Hmac`, `Kdf`, `KdfAdmission`, and `Signature`; select backends through direct
-`/WebCrypto`, `/Portable`, or `/NodeCrypto` imports. Auth currently retains its
+`/WebCrypto`, `/Portable`, `/platform-node`, or `/platform-bun` imports. Auth currently retains its
 existing cryptography services and `@yielded/auth-crypto` adapters.
+
+`@yielded/jose` depends on Effect and `@yielded/crypto`. It owns JOSE formats,
+key metadata, JWT Schema boundaries, and scoped JWKS caching; it must not depend
+on Auth. Its root and flat modules expose `Errors`, `Jwk`, `Jwks`, `Jws`, `Jwt`,
+and `Jwe`. The selected JOSE profile is documented in the public reference.
 
 The package build preserves implementation modules and native root/group namespaces
 in both JavaScript and declarations. Every namespace target is also an explicit
@@ -77,9 +82,9 @@ retain their initialization even when only one API is used.
 
 `vp run check:package-consumers` requires built packages and runs during `build`.
 It loads and type-checks every core export with only Effect installed, then every
-default persistence export without Drizzle installed. A separate crypto stage loads
-and type-checks its published exports without Auth, adding Noble dependencies only
-for backend checks. Browser resolution excludes native imports outside `/NodeCrypto`.
+default persistence export without Drizzle installed. Separate crypto and JOSE stages load
+and type-check their published exports without Auth or panva/jose, adding Noble dependencies only
+for crypto backend checks. Browser resolution excludes native imports outside `/platform-node` or `/platform-bun`.
 It stages the publisher's manifests and built files with the selected adapters' required dependencies,
 compares equivalent root/group/direct consumers through esbuild and Vite/Rolldown,
 checks their declarations, and runs native ESM and bundled consumers. It protects
@@ -116,7 +121,7 @@ Before enabling automated releases:
 3. Configure npm trusted publishing for each published package, including
    `@yielded/auth`, `@yielded/auth-persistence`, `@yielded/auth-persistence-drizzle`,
    `@yielded/auth-simplewebauthn`, `@yielded/auth-react-native`, `@yielded/auth-electron`,
-   `@yielded/auth-openid-client`, `@yielded/auth-crypto`, `@yielded/crypto`,
+   `@yielded/auth-openid-client`, `@yielded/auth-crypto`, `@yielded/crypto`, `@yielded/jose`,
    and `@yielded/drizzle-effect-v4-patch`, repository
    `yielded-dev/auth`, workflow `release.yml`. The first npm publication may
    require a manually authenticated owner before trusted publishing can be set.
