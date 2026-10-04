@@ -1,12 +1,12 @@
 // oxlint-disable-next-line import/extensions -- Noble exposes only its explicit .js subpath.
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
+import type { OAuthTransactionSecrets } from "@yielded/auth/OAuth";
 import {
   type OAuthTransactionKeyring,
   OAuthConfigurationError,
   OAuthUnavailable,
   OAuthEncryptionKeyId,
   OAuthSealedTransaction,
-  OAuthTransactionSecrets,
   snapshotOAuthSync,
 } from "@yielded/auth/OAuth";
 import { Crypto, Effect, Redacted, Result, Schema } from "effect";
@@ -23,7 +23,6 @@ const keyringSchema = Schema.Struct({
 });
 
 const encoder = new TextEncoder();
-const secretCodec = Schema.fromJsonString(OAuthTransactionSecrets);
 
 const decodeBase64 = (value: string, maximum: number, exact?: number) => {
   if (
@@ -48,11 +47,12 @@ const decodeBase64 = (value: string, maximum: number, exact?: number) => {
   return bytes;
 };
 
-const validateSecrets = (
+const validateSecrets = <S extends OAuthTransactionSecrets>(
   context: { readonly protocol: "oidc" | "oauth" },
-  secrets: OAuthTransactionSecrets,
+  secrets: S,
+  schema: Schema.Codec<S, unknown, never, never>,
 ) => {
-  const value = snapshotOAuthSync(OAuthTransactionSecrets, secrets);
+  const value = snapshotOAuthSync(schema, secrets);
 
   if ((context.protocol === "oidc") !== (value.oidcNonce !== undefined))
     throw OAuthUnavailable.make({});
@@ -64,11 +64,20 @@ const validateSecrets = (
 };
 
 /** Private primitive: public protectors each own a fixed typed AAD domain. */
-export const transactionEncryption = <C extends { readonly protocol: "oidc" | "oauth" }>(
+export const transactionEncryption = <
+  C extends { readonly protocol: "oidc" | "oauth" },
+  S extends OAuthTransactionSecrets,
+>(
   contextSchema: Schema.Codec<C, unknown, never, never>,
   aad: (context: C, keyId: string) => Uint8Array,
   keyring: OAuthTransactionKeyring,
+  secretSchema: Schema.Codec<S, unknown, never, never>,
+  envelope: {
+    readonly schema: Schema.Codec<OAuthSealedTransaction, unknown, never, never>;
+    readonly maximumPlaintextBytes: number;
+  } = { schema: OAuthSealedTransaction, maximumPlaintextBytes: 16384 },
 ) => {
+  const secretCodec = Schema.fromJsonString(secretSchema);
   let captured: typeof keyringSchema.Type | undefined;
 
   try {
@@ -106,12 +115,12 @@ export const transactionEncryption = <C extends { readonly protocol: "oidc" | "o
     return {
       seal: Effect.fn("OAuthTransactionProtector.seal")(function* (input: {
         readonly context: C;
-        readonly secrets: OAuthTransactionSecrets;
+        readonly secrets: S;
       }) {
         const retained = yield* Effect.try({
           try: () => ({
             context: snapshotOAuthSync(contextSchema, input.context),
-            secrets: validateSecrets(input.context, input.secrets),
+            secrets: validateSecrets(input.context, input.secrets, secretSchema),
           }),
           catch: () => OAuthUnavailable.make({}),
         });
@@ -127,14 +136,15 @@ export const transactionEncryption = <C extends { readonly protocol: "oidc" | "o
             try {
               plaintext = encoder.encode(Schema.encodeSync(secretCodec)(retained.secrets));
               associated = aad(retained.context, configuration.activeKeyId);
-              if (plaintext.length > 16384 || nonce.length !== 24) throw OAuthUnavailable.make({});
+              if (plaintext.length > envelope.maximumPlaintextBytes || nonce.length !== 24)
+                throw OAuthUnavailable.make({});
               ciphertext = xchacha20poly1305(
                 keys.get(configuration.activeKeyId)!,
                 nonce,
                 associated,
               ).encrypt(plaintext);
 
-              return snapshotOAuthSync(OAuthSealedTransaction, {
+              return snapshotOAuthSync(envelope.schema, {
                 format: "oauth-xchacha20poly1305-v1",
                 keyId: configuration.activeKeyId,
                 nonce: Base64Url.encode(nonce),
@@ -155,7 +165,7 @@ export const transactionEncryption = <C extends { readonly protocol: "oidc" | "o
           Effect.try({
             try: () => {
               const context = snapshotOAuthSync(contextSchema, input.context);
-              const sealed = snapshotOAuthSync(OAuthSealedTransaction, input.sealed);
+              const sealed = snapshotOAuthSync(envelope.schema, input.sealed);
               const key = keys.get(sealed.keyId);
 
               if (!key) throw OAuthUnavailable.make({});
@@ -166,17 +176,21 @@ export const transactionEncryption = <C extends { readonly protocol: "oidc" | "o
 
               try {
                 nonce = decodeBase64(sealed.nonce, 24, 24);
-                ciphertext = decodeBase64(Redacted.value(sealed.ciphertext), 16400);
+                ciphertext = decodeBase64(
+                  Redacted.value(sealed.ciphertext),
+                  envelope.maximumPlaintextBytes + 16,
+                );
                 associated = aad(context, sealed.keyId);
                 plaintext = xchacha20poly1305(key, nonce, associated).decrypt(ciphertext);
-                if (plaintext.length > 16384) throw OAuthUnavailable.make({});
+                if (plaintext.length > envelope.maximumPlaintextBytes)
+                  throw OAuthUnavailable.make({});
                 const json = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
                 const secrets = Schema.decodeSync(secretCodec)(json);
 
                 if (Schema.encodeSync(secretCodec)(secrets) !== json)
                   throw OAuthUnavailable.make({});
 
-                return validateSecrets(context, secrets);
+                return validateSecrets(context, secrets, secretSchema);
               } finally {
                 nonce?.fill(0);
                 ciphertext?.fill(0);

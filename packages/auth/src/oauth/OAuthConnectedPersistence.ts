@@ -65,6 +65,9 @@ export class OAuthConnectedPersistence extends Context.Service<
       | undefined,
       OAuthUnavailable
     >;
+    /** Promote the exact retained Prepared flow to Pending under current action
+     * authority. Reject missing, changed, expired or already-issued preparations;
+     * never insert a replacement flow or refresh its binding and deadlines. */
     readonly issue: <A>(
       input: {
         readonly flow: M.OAuthConnectedPendingFlow;
@@ -72,6 +75,20 @@ export class OAuthConnectedPersistence extends Context.Service<
       },
       prepare: PrepareOAuthCommit<typeof M.OAuthConnectedIssueDecision.Type, A>,
     ) => Mutation<A>;
+    /** Retain one sealed preparation under current metadata authority. No code
+     * exchange or callback claim is permitted before exact-action issuance. */
+    readonly prepare: <A>(
+      input: {
+        readonly flow: M.OAuthConnectedPendingFlow;
+        readonly authorization: M.OAuthConnectedUseAuthorization;
+      },
+      prepare: PrepareOAuthCommit<typeof M.OAuthConnectedIssueDecision.Type, A>,
+    ) => Mutation<A>;
+    /** Server-only target resolution. Match original bearer/command and current
+     * subject revisions under the authority clock; never refresh the snapshot. */
+    readonly inspectPrepared: (
+      input: M.OAuthConnectedPreparedAccess,
+    ) => Effect.Effect<M.OAuthConnectedPendingFlow | undefined, OAuthUnavailable>;
     readonly preflight: (
       input: M.OAuthConnectedAccess,
     ) => Effect.Effect<M.OAuthConnectedPendingFlow | undefined, OAuthUnavailable>;
