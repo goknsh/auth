@@ -9,7 +9,7 @@ import {
 } from "@yielded/auth-simplewebauthn/Browser";
 import { Cause, Schema } from "effect";
 import type { AsyncResult } from "effect/reactivity";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { FlowExpired, type AccountClient } from "./client";
@@ -22,6 +22,8 @@ interface AccountAppOptions {
   readonly minimumPasswordLength: number;
   readonly username?: boolean;
   readonly emailDeliveryHint?: string;
+  readonly banner?: ReactNode;
+  readonly returnToApp?: boolean;
 }
 
 export const mountAccountApp = (client: AccountClient, options: AccountAppOptions) => {
@@ -210,7 +212,15 @@ export const mountAccountApp = (client: AccountClient, options: AccountAppOption
           </div>
         )}
         <button className="primary submit" disabled={result.waiting || passkeyResult.waiting}>
-          {result.waiting ? "Please wait…" : register ? "Create account" : "Sign in"}
+          {result.waiting
+            ? "Please wait…"
+            : register
+              ? options.returnToApp
+                ? "Create account and return to app"
+                : "Create account"
+              : options.returnToApp
+                ? "Sign in and return to app"
+                : "Sign in"}
           <span aria-hidden="true">↗</span>
         </button>
         <Failure
@@ -234,7 +244,11 @@ export const mountAccountApp = (client: AccountClient, options: AccountAppOption
               disabled={result.waiting || passkeyResult.waiting}
               onClick={() => passkeyLogin()}
             >
-              {passkeyResult.waiting ? "Follow your browser’s prompt…" : "Sign in with a passkey"}
+              {passkeyResult.waiting
+                ? "Follow your browser’s prompt…"
+                : options.returnToApp
+                  ? "Use a passkey and return to app"
+                  : "Sign in with a passkey"}
             </button>
             <Failure
               result={passkeyResult}
@@ -506,6 +520,7 @@ export const mountAccountApp = (client: AccountClient, options: AccountAppOption
             EXAMPLE {options.number}
           </span>
         </header>
+        {options.banner}
         <section className="intro">
           <p className="eyebrow">YOUR SPACE</p>
           <h1>
