@@ -112,7 +112,7 @@ Auth places the reference and secret in the URL fragment. Use
 must not consume it: show a confirmation action, clear the fragment from browser
 history, and complete from the originating client.
 
-<details>
+<details id="proof-expiry-and-rate-limits">
 <summary>Proof expiry and rate limits</summary>
 
 ```ts title="apps/server/proof-policy.ts"
@@ -138,15 +138,24 @@ export const proofPolicy: Proofs.ProofPolicy = {
 };
 ```
 
-Choose the action-wide limits for your application's traffic. Resending or changing
-flow IDs must not reset account-level attempt budgets.
+Size `actionIssues` for peak accepted deliveries across the whole deployment; it
+is a shared circuit breaker, not a per-client allowance. The values above are an
+example policy. Only newly issued proofs spend issuance budgets; suppressed,
+ineligible, and replayed requests still pass host ingress admission. Attempts keep
+their independent budgets across resends and flow IDs.
+
+A live, unexpired proof can be replaced only with the same complete request
+binding. Knowing its public reference does not grant replacement authority.
+A different flow may need to wait for expiry; host ingress limits unsolicited
+requests but cannot guarantee availability against distributed traffic.
 
 </details>
 
 ## Supply the services
 
-Lookup, claims, storage, and delivery are application-supplied. The library provides
-a delivery worker, an exact-route allowlist helper, Web Crypto, and empty lifecycle hooks:
+Your application supplies lookup, claims, storage, and delivery. Auth provides
+request rate limiting, a delivery worker, an exact-route allowlist helper,
+Web Crypto, and empty lifecycle hooks:
 
 ```ts title="apps/server/email-live.ts"
 import { Layer } from "effect";
@@ -179,6 +188,11 @@ See [email delivery](./email-delivery#compose-auth) for runtime ownership and ov
 `AuthDependencies` supplies the shared
 [session, account, and key configuration](../reference/adapters#compose-the-application-layer).
 For database-backed lookup, use [the email adapter](../reference/adapters#email).
+
+Email requests and resends check the built-in rate limiter before target lookup,
+including exact retries and unknown addresses. HTTP derives the caller from the
+socket peer automatically. See [HTTP admission](./http-and-client#proof-request-admission)
+for configuration and overrides.
 
 For new accounts use `Email.makeRegistration`; for verified-address management
 use `Email.makeAddresses`. Verification alone does not sign in or link an account.

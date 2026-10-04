@@ -168,6 +168,15 @@ Retain the original flow ID, email, request ID, and reference. Always show a gen
 response such as “If this address is eligible, check your email.” The receipt does
 not reveal account eligibility or whether a message was sent.
 
+To resend, retain the flow ID and use a fresh request ID after the cooldown.
+A new reset attempt leaves an existing unexpired link or code usable and sends no
+new email. Ignored requests do not extend its expiry (five minutes by default).
+
+Auth supplies a network rate limiter, and HTTP derives the caller from the socket
+peer automatically. Checks precede target lookup, including unknown addresses and
+retries. See [HTTP admission](./http-and-client#proof-request-admission) for overrides and
+[proof budgets](./codes#proof-expiry-and-rate-limits) for delivery limits.
+
 For links, the originating client uses `EmailDelivery.parseLinkFragment` to extract
 the reference and secret, clears the fragment from history, then waits for an
 intentional confirmation before submitting. A landing-page GET must never consume

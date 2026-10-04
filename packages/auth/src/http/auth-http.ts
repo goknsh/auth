@@ -7,6 +7,7 @@ import {
   Duration,
   Effect,
   Layer,
+  Option,
   Redacted,
   Scope,
 } from "effect";
@@ -41,10 +42,27 @@ import {
 } from "../operations/credentials";
 import type { RequestBindingConfigurationError } from "../operations/requestBinding";
 import type { RequestBindingConfig } from "../operations/RequestBindingConfig";
+import { ProofUnavailable } from "../proofs/errors";
+import { ProofRequestContext } from "../proofs/ProofRequestContext";
 import type { SessionMetadata } from "../sessions/models";
 import { httpGroup, matchesEndpoint } from "./auth-contract";
 import { makeOAuth, type OAuthOptions } from "./oauth";
 import type { makeSessionHttpContract } from "./session-contract";
+
+const withProofRequestContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const supplied = yield* Effect.serviceOption(ProofRequestContext);
+    const incoming = yield* HttpServerRequest.HttpServerRequest;
+
+    const context = Option.isSome(supplied)
+      ? supplied.value
+      : Option.match(incoming.remoteAddress, {
+          onNone: () => Effect.fail(ProofUnavailable.make({})),
+          onSome: (address) => Effect.succeed({ networkKey: Redacted.make(address) }),
+        });
+
+    return yield* Effect.provideService(effect, ProofRequestContext, context);
+  });
 
 /** Browser transport policy. Secure names retain __Host-; insecure cookies are loopback-only. */
 export interface AuthHttpOptions<E = never, R = never, ResponseR = never> {
@@ -93,10 +111,6 @@ type CallbackServices<C> = C extends { readonly callbacks?: infer Callbacks }
 type ResponseServices<O> =
   | ResponseRequirement<OAuthConfiguration<O>>
   | CallbackServices<OAuthConfiguration<O>>;
-type ResponseRequirements<O> = Exclude<
-  ResponseServices<O>,
-  AuthRequest | AuthCredentialCommandCollector | AuthRevealCommandCollectorService | Scope.Scope
->;
 type OAuthConfigured<O, A> = [OAuthConfiguration<O>] extends [never] ? never : A;
 type OAuthProvided<O> = O extends { readonly oauth: OAuthOptions<unknown, unknown, unknown> }
   ? OAuthProtocol | OAuthConnectedProtocol
@@ -330,6 +344,7 @@ export const make = <
           beforeMutation,
           credentialCommandSink: sink,
         }),
+        withProofRequestContext,
       );
 
       const now = DateTime.toEpochMillis(yield* DateTime.now);
@@ -355,7 +370,7 @@ export const make = <
     });
 
   const requestLayer = HttpRouter.middleware<{
-    provides: I | AuthRequest;
+    provides: I | AuthRequest | ProofRequestContext;
   }>()(
     Effect.gen(function* () {
       const api = yield* auth;
@@ -481,14 +496,15 @@ export const make = <
     );
 
     const server = Effect.gen(function* () {
-      const responseServices = yield* Effect.context<ResponseRequirements<Options>>();
+      const api = yield* auth;
       const callbacks = oauth === undefined ? [] : yield* oauth.callbacks(table);
+      const server = yield* makeOperationServer({ routes: table }, { callbacks });
 
-      const server = yield* makeOperationServer({ routes: table }, { callbacks }).pipe(
-        Effect.provide(responseServices),
-      );
-
-      return { ...server, callbackPaths: callbacks.map((callback) => callback.path) };
+      return {
+        handle: (request: Request) =>
+          server.handle(request).pipe(Effect.provideService(auth, api), withProofRequestContext),
+        callbackPaths: callbacks.map((callback) => callback.path),
+      };
     }).pipe(Effect.provide([configuration, requestInvocation]));
 
     // Binding configuration is acquired only by the configured OAuth branch.
@@ -497,7 +513,6 @@ export const make = <
       | Exclude<Effect.Error<typeof server>, RequestBindingConfigurationError>
       | OAuthConfigured<Options, RequestBindingConfigurationError>,
       | Exclude<Effect.Services<typeof server>, RequestBindingConfig>
-      | ResponseRequirements<Options>
       | OAuthConfigured<Options, RequestBindingConfig>
     >;
   };
@@ -521,6 +536,9 @@ export const make = <
 
     type Mounted = HttpApiGroup.WithIdentifier<Groups, Name>;
     type Endpoint = HttpApiGroup.Endpoints<Mounted>;
+    type InvocationServices = Effect.Services<
+      ReturnType<Effect.Success<ReturnType<typeof makeServer>>["handle"]>
+    >;
     type Requirements<E extends HttpApiEndpoint.Constraint> = E extends HttpApiEndpoint.Constraint
       ?
           | HttpApiEndpoint.Middleware<E>
@@ -529,7 +547,9 @@ export const make = <
               "Requires",
               HttpApiEndpoint.ExcludeProvided<
                 E,
-                HttpApiEndpoint.ServerServices<E> | HttpServerRequest.HttpServerRequest
+                | InvocationServices
+                | HttpApiEndpoint.ServerServices<E>
+                | HttpServerRequest.HttpServerRequest
               >
             >
       : never;

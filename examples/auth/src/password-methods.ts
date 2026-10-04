@@ -267,6 +267,11 @@ const program = Effect.gen(function* () {
   }).pipe(
     Effect.scoped,
     Effect.provideService(Auth.AuthRequest, { ...call, invocation: Operations.guest }),
+    // This CLI host owns its caller; HTTP hosts derive a fresh key per request.
+    Effect.provideService(
+      Proofs.ProofRequestContext,
+      Effect.succeed({ networkKey: Redacted.make("password-cli") }),
+    ),
     Effect.provide(
       Layer.mergeAll(sessionHandlers, model.layer, strategy, completion, delivery, screening),
     ),
